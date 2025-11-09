@@ -14,12 +14,14 @@
  * HOW THE SERVER WORKS:
  * 1. It creates an MCP server instance with identity information
  * 2. It defines a set of tools for managing todos
- * 3. It connects to a transport (stdio in this case)
+ * 3. It connects to a transport (HTTP SSE in this configuration)
  * 4. It handles incoming tool calls from clients (like Claude)
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { z } from "zod";
+import { createServer } from "node:http";
+import type { IncomingMessage, ServerResponse, Server as HttpServer } from "node:http";
 
 // Import models and schemas
 import {
@@ -50,6 +52,10 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
+let activeTransport: SSEServerTransport | null = null;
+let httpServer: HttpServer | null = null;
+let shuttingDown = false;
+
 /**
  * Helper function to safely execute operations
  * 
@@ -78,6 +84,77 @@ async function safeExecute<T>(operation: () => T, errorMessage: string) {
       return new Error(`${errorMessage}: ${error.message}`);
     }
     return new Error(errorMessage);
+  }
+}
+
+async function handleSseRequest(_req: IncomingMessage, res: ServerResponse) {
+  console.error("Received SSE connection request");
+
+  if (shuttingDown) {
+    res.writeHead(503).end("Server is shutting down");
+    return;
+  }
+
+  const existingTransport = activeTransport;
+  if (existingTransport) {
+    console.error("Closing existing SSE session before accepting new connection");
+    try {
+      await existingTransport.close();
+    } catch (error) {
+      console.error("Error while closing existing SSE session:", error);
+    }
+
+    activeTransport = null;
+
+    try {
+      await server.close();
+    } catch (error) {
+      console.error("Error while closing previous MCP transport:", error);
+    }
+  }
+
+  const transport = new SSEServerTransport(config.http.messagesPath, res);
+  activeTransport = transport;
+
+  res.on("close", () => {
+    if (activeTransport === transport) {
+      activeTransport = null;
+    }
+  });
+
+  try {
+    await server.connect(transport);
+    console.error(`SSE connection established (sessionId=${transport.sessionId})`);
+    console.error(
+      `Send MCP messages via POST ${config.http.messagesPath}?sessionId=${transport.sessionId}`
+    );
+  } catch (error) {
+    console.error("Failed to establish SSE connection:", error);
+    if (!res.headersSent) {
+      res.writeHead(500).end("Failed to establish SSE connection");
+    } else {
+      res.end();
+    }
+
+    if (activeTransport === transport) {
+      activeTransport = null;
+    }
+  }
+}
+
+async function handleMessagesRequest(req: IncomingMessage, res: ServerResponse) {
+  if (!activeTransport) {
+    res.writeHead(503).end("No active SSE session");
+    return;
+  }
+
+  try {
+    await activeTransport.handlePostMessage(req, res);
+  } catch (error) {
+    console.error("Failed to handle MCP message:", error);
+    if (!res.headersSent) {
+      res.writeHead(500).end("Failed to handle MCP message");
+    }
   }
 }
 
@@ -432,54 +509,127 @@ server.tool(
  * This function:
  * 1. Initializes the server
  * 2. Sets up graceful shutdown handlers
- * 3. Connects to the transport
+ * 3. Starts an HTTP server that exposes the SSE transport
  * 
- * WHY USE STDIO TRANSPORT?
- * - Works well with the MCP protocol
- * - Simple to integrate with LLM platforms like Claude Desktop
- * - No network configuration required
- * - Easy to debug and test
+ * WHY USE HTTP SSE TRANSPORT?
+ * - Enables remote clients to connect over HTTP
+ * - Keeps a streaming channel open for MCP traffic
+ * - Matches the MCP SDK's built-in HTTP streaming support
  */
 async function main() {
   console.error("Starting Todo MCP Server...");
   console.error(`SQLite database path: ${config.db.path}`);
-  
+  console.error(`HTTP base URL: ${config.http.baseUrl}`);
+
   try {
-    // Database is automatically initialized when the service is imported
-    
-    /**
-     * Set up graceful shutdown to close the database
-     * 
-     * This ensures data is properly saved when the server is stopped.
-     * Both SIGINT (Ctrl+C) and SIGTERM (kill command) are handled.
-     */
-    process.on('SIGINT', () => {
-      console.error('Shutting down...');
-      databaseService.close();
-      process.exit(0);
+    httpServer = createServer((req, res) => {
+      void (async () => {
+        if (!req.url) {
+          res.writeHead(400).end("Bad Request");
+          return;
+        }
+
+        const requestUrl = new URL(req.url, config.http.baseUrl);
+
+        if (req.method === "GET" && requestUrl.pathname === config.http.ssePath) {
+          await handleSseRequest(req, res);
+          return;
+        }
+
+        if (req.method === "POST" && requestUrl.pathname === config.http.messagesPath) {
+          await handleMessagesRequest(req, res);
+          return;
+        }
+
+        res.writeHead(404).end("Not Found");
+      })().catch((error) => {
+        console.error("Unhandled error while processing request:", error);
+        if (!res.headersSent) {
+          res.writeHead(500).end("Internal Server Error");
+        } else {
+          res.end();
+        }
+      });
     });
-    
-    process.on('SIGTERM', () => {
-      console.error('Shutting down...');
-      databaseService.close();
-      process.exit(0);
+
+    await new Promise<void>((resolve, reject) => {
+      if (!httpServer) {
+        reject(new Error("HTTP server not initialized"));
+        return;
+      }
+
+      const onError = (error: Error) => {
+        httpServer?.off("error", onError);
+        reject(error);
+      };
+
+      httpServer.once("error", onError);
+      httpServer.listen(config.http.port, config.http.host, () => {
+        httpServer?.off("error", onError);
+        resolve();
+      });
     });
-    
-    /**
-     * Connect to stdio transport
-     * 
-     * The StdioServerTransport uses standard input/output for communication,
-     * which is how Claude Desktop and other MCP clients connect to the server.
-     */
-    const transport = new StdioServerTransport();
-    await server.connect(transport);
-    
-    console.error("Todo MCP Server running on stdio transport");
+
+    console.error("Todo MCP Server running on HTTP SSE transport");
+    console.error(`SSE endpoint: ${config.http.sseUrl}`);
+    console.error(`Message endpoint: ${config.http.messagesUrl}`);
   } catch (error) {
     console.error("Failed to start Todo MCP Server:", error);
     databaseService.close();
+
+    if (httpServer) {
+      await new Promise<void>((resolve) => {
+        httpServer?.close(() => resolve());
+      });
+    }
+
     process.exit(1);
   }
+
+  const shutdown = async (signal: NodeJS.Signals) => {
+    if (shuttingDown) {
+      return;
+    }
+
+    shuttingDown = true;
+    console.error(`Received ${signal}. Shutting down...`);
+
+    if (activeTransport) {
+      try {
+        await activeTransport.close();
+      } catch (error) {
+        console.error("Error closing SSE transport during shutdown:", error);
+      } finally {
+        activeTransport = null;
+      }
+    }
+
+    try {
+      await server.close();
+    } catch (error) {
+      console.error("Error closing MCP server during shutdown:", error);
+    }
+
+    await new Promise<void>((resolve) => {
+      if (!httpServer) {
+        resolve();
+        return;
+      }
+
+      httpServer.close((closeError) => {
+        if (closeError) {
+          console.error("Error closing HTTP server:", closeError);
+        }
+        resolve();
+      });
+    });
+
+    databaseService.close();
+    process.exit(0);
+  };
+
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
 }
 
 // Start the server

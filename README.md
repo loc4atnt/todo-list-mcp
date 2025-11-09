@@ -54,6 +54,15 @@ npm run build
 npm start
 ```
 
+By default, the server listens on `http://127.0.0.1:3001`. The SSE stream is exposed at `/sse` and the HTTP POST endpoint for client messages is `/messages`. These values can be overridden with the following environment variables:
+
+- `TODO_HTTP_HOST` – Hostname or IP address to bind (default: `127.0.0.1`)
+- `TODO_HTTP_PORT` – Port to listen on (default: `3001`)
+- `TODO_HTTP_SSE_PATH` – Path for the SSE endpoint (default: `/sse`)
+- `TODO_HTTP_MESSAGES_PATH` – Path for the HTTP POST endpoint (default: `/messages`)
+
+When the server boots, it logs the full URLs it is serving so you can confirm the configuration.
+
 ### Configuring with Claude for Desktop
 
 #### Claude Desktop
@@ -64,8 +73,8 @@ Add this to your `claude_desktop_config.json`:
 {
   "mcpServers": {
     "todo": {
-      "command": "node",
-      "args": ["/absolute/path/to/todo-list-mcp/dist/index.js"]
+      "type": "http",
+      "url": "http://127.0.0.1:3001/sse"
     }
   }
 }
@@ -73,10 +82,10 @@ Add this to your `claude_desktop_config.json`:
 
 #### Cursor
 
-- Go to "Cursor Settings" -> MCP
-- Add a new MCP server with a "command" type
-- Add the absolute path of the server and run it with node
-- Example: node /absolute/path/to/todo-list-mcp/dist/index.js
+- Go to "Cursor Settings" → MCP
+- Add a new MCP server with an **HTTP** transport
+- Set the server URL to `http://127.0.0.1:3001/sse` (update host/port if you changed the defaults)
+- Make sure the Todo MCP server is running (`npm start`) before connecting from Cursor
 
 ### Example Commands
 

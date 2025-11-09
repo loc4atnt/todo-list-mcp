@@ -15,6 +15,9 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 /**
  * Database configuration defaults
  * 
@@ -27,6 +30,19 @@ import fs from 'fs';
  */
 const DEFAULT_DB_FOLDER = path.join(os.homedir(), '.todo-list-mcp');
 const DEFAULT_DB_FILE = 'todos.sqlite';
+
+const DEFAULT_HTTP_HOST = '127.0.0.1';
+const DEFAULT_HTTP_PORT = 4041;
+const DEFAULT_HTTP_SSE_PATH = '/sse';
+const DEFAULT_HTTP_MESSAGES_PATH = '/messages';
+
+function parsePort(value: string | undefined, fallback: number): number {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
 
 /**
  * Application configuration object
@@ -54,6 +70,24 @@ export const config = {
      */
     get path() {
       return path.join(this.folder, this.filename);
+    }
+  },
+  http: {
+    host: process.env.TODO_HTTP_HOST || DEFAULT_HTTP_HOST,
+    port: parsePort(process.env.TODO_HTTP_PORT, DEFAULT_HTTP_PORT),
+    ssePath: process.env.TODO_HTTP_SSE_PATH || DEFAULT_HTTP_SSE_PATH,
+    messagesPath: process.env.TODO_HTTP_MESSAGES_PATH || DEFAULT_HTTP_MESSAGES_PATH,
+    get baseUrl() {
+      const host = this.host.includes(':') && !this.host.startsWith('[')
+        ? `[${this.host}]`
+        : this.host;
+      return `http://${host}:${this.port}`;
+    },
+    get sseUrl() {
+      return `${this.baseUrl}${this.ssePath}`;
+    },
+    get messagesUrl() {
+      return `${this.baseUrl}${this.messagesPath}`;
     }
   }
 };
