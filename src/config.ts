@@ -36,6 +36,14 @@ const DEFAULT_HTTP_PORT = 4041;
 const DEFAULT_HTTP_SSE_PATH = '/sse';
 const DEFAULT_HTTP_MESSAGES_PATH = '/messages';
 
+function normalizeToken(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function parsePort(value: string | undefined, fallback: number): number {
   if (!value) {
     return fallback;
@@ -77,6 +85,8 @@ export const config = {
     port: parsePort(process.env.TODO_HTTP_PORT, DEFAULT_HTTP_PORT),
     ssePath: process.env.TODO_HTTP_SSE_PATH || DEFAULT_HTTP_SSE_PATH,
     messagesPath: process.env.TODO_HTTP_MESSAGES_PATH || DEFAULT_HTTP_MESSAGES_PATH,
+    authScheme: (process.env.TODO_HTTP_AUTH_SCHEME || 'Bearer').trim(),
+    authToken: normalizeToken(process.env.TODO_HTTP_AUTH_TOKEN),
     get baseUrl() {
       const host = this.host.includes(':') && !this.host.startsWith('[')
         ? `[${this.host}]`
@@ -88,6 +98,15 @@ export const config = {
     },
     get messagesUrl() {
       return `${this.baseUrl}${this.messagesPath}`;
+    },
+    get requiresAuth() {
+      return Boolean(this.authToken);
+    },
+    get expectedAuthHeader() {
+      if (!this.requiresAuth) {
+        return undefined;
+      }
+      return `${this.authScheme} ${this.authToken}`;
     }
   }
 };

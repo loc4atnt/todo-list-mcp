@@ -87,11 +87,50 @@ async function safeExecute<T>(operation: () => T, errorMessage: string) {
   }
 }
 
-async function handleSseRequest(_req: IncomingMessage, res: ServerResponse) {
+function getAuthorizationHeader(req: IncomingMessage) {
+  const header = req.headers["authorization"];
+  if (Array.isArray(header)) {
+    return header[0];
+  }
+  return header;
+}
+
+function isRequestAuthorized(req: IncomingMessage, res: ServerResponse) {
+  if (!config.http.requiresAuth) {
+    return true;
+  }
+
+  const expected = config.http.expectedAuthHeader;
+  const provided = getAuthorizationHeader(req);
+
+  if (!expected) {
+    return true;
+  }
+
+  if (provided === expected) {
+    return true;
+  }
+
+  console.error("Rejected unauthorized request");
+  if (!res.headersSent) {
+    res.writeHead(401, {
+      "Content-Type": "text/plain",
+      "WWW-Authenticate": `${config.http.authScheme} realm="Todo MCP Server"`,
+    });
+  }
+  res.end("Unauthorized");
+  return false;
+}
+
+async function handleSseRequest(req: IncomingMessage, res: ServerResponse) {
   console.error("Received SSE connection request");
 
   if (shuttingDown) {
     res.writeHead(503).end("Server is shutting down");
+    return;
+  }
+
+  if (!isRequestAuthorized(req, res)) {
     return;
   }
 
@@ -143,6 +182,10 @@ async function handleSseRequest(_req: IncomingMessage, res: ServerResponse) {
 }
 
 async function handleMessagesRequest(req: IncomingMessage, res: ServerResponse) {
+  if (!isRequestAuthorized(req, res)) {
+    return;
+  }
+
   if (!activeTransport) {
     res.writeHead(503).end("No active SSE session");
     return;

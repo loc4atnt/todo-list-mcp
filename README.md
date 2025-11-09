@@ -54,14 +54,24 @@ npm run build
 npm start
 ```
 
-By default, the server listens on `http://127.0.0.1:3001`. The SSE stream is exposed at `/sse` and the HTTP POST endpoint for client messages is `/messages`. These values can be overridden with the following environment variables:
+By default, the server listens on `http://127.0.0.1:4041`. The SSE stream is exposed at `/sse` and the HTTP POST endpoint for client messages is `/messages`. These values can be overridden with the following environment variables:
 
 - `TODO_HTTP_HOST` – Hostname or IP address to bind (default: `127.0.0.1`)
-- `TODO_HTTP_PORT` – Port to listen on (default: `3001`)
+- `TODO_HTTP_PORT` – Port to listen on (default: `4041`)
 - `TODO_HTTP_SSE_PATH` – Path for the SSE endpoint (default: `/sse`)
 - `TODO_HTTP_MESSAGES_PATH` – Path for the HTTP POST endpoint (default: `/messages`)
+- `TODO_HTTP_AUTH_TOKEN` – Optional token required in the `Authorization` header
+- `TODO_HTTP_AUTH_SCHEME` – Authorization scheme prefix (default: `Bearer`)
 
 When the server boots, it logs the full URLs it is serving so you can confirm the configuration.
+
+If `TODO_HTTP_AUTH_TOKEN` is set, every request to the SSE and message endpoints must include:
+
+```
+Authorization: Bearer <your-token>
+```
+
+Adjust the header value if you customized `TODO_HTTP_AUTH_SCHEME`.
 
 ### Configuring with Claude for Desktop
 
@@ -74,7 +84,10 @@ Add this to your `claude_desktop_config.json`:
   "mcpServers": {
     "todo": {
       "type": "http",
-      "url": "http://127.0.0.1:3001/sse"
+      "url": "http://127.0.0.1:4041/sse",
+      "headers": {
+        "Authorization": "Bearer YOUR_TOKEN"
+      }
     }
   }
 }
@@ -84,7 +97,8 @@ Add this to your `claude_desktop_config.json`:
 
 - Go to "Cursor Settings" → MCP
 - Add a new MCP server with an **HTTP** transport
-- Set the server URL to `http://127.0.0.1:3001/sse` (update host/port if you changed the defaults)
+- Set the server URL to `http://127.0.0.1:4041/sse` (update host/port if you changed the defaults)
+- Add a default header for `Authorization` if you configured `TODO_HTTP_AUTH_TOKEN`
 - Make sure the Todo MCP server is running (`npm start`) before connecting from Cursor
 
 ### Example Commands
